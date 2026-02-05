@@ -4,6 +4,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from kokoro_onnx import Kokoro
 from huggingface_hub import hf_hub_download
 import soundfile as sf
+import requests
 import io
 import os
 
@@ -24,26 +25,41 @@ def get_model():
     if kokoro_model is not None:
         return kokoro_model
     
-    print("🔄 Carregando modelo Kokoro v1.0...")
+    print("🔄 Iniciando carregamento do modelo...")
     try:
-        # 1. Baixa o MODELO (Já funcionou no seu log)
+        # 1. Baixa o MODELO ONNX (Cache do HuggingFace)
+        print("   - Verificando Model ONNX...")
         model_path = hf_hub_download(
             repo_id="onnx-community/Kokoro-82M-v1.0-ONNX", 
             filename="onnx/model.onnx"
         )
         
-        # 2. CORREÇÃO: Baixa o VOICES.json do mesmo repositório novo
-        # O arquivo voices.json está dentro da pasta onnx/ no novo repo
-        voices_path = hf_hub_download(
-            repo_id="onnx-community/Kokoro-82M-v1.0-ONNX", 
-            filename="onnx/voices.json"
-        )
+        # 2. CORREÇÃO: Baixa o novo formato VOICES.BIN (Do GitHub Releases)
+        # O voices.json morreu. O novo padrão é .bin
+        voices_file = "voices.bin"
+        if not os.path.exists(voices_file):
+            print("   - Baixando voices.bin (novo formato)...")
+            # Link direto da Release Oficial v1.0
+            url = "https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/voices-v1.0.bin"
+            
+            response = requests.get(url, allow_redirects=True)
+            if response.status_code == 200:
+                with open(voices_file, "wb") as f:
+                    f.write(response.content)
+            else:
+                raise Exception(f"Falha ao baixar voices.bin: Status {response.status_code}")
         
+        voices_path = os.path.abspath(voices_file)
+        
+        # 3. Inicializa (A lib kokoro-onnx aceita o .bin automaticamente)
         kokoro_model = Kokoro(model_path, voices_path)
         print("✅ Modelo carregado com sucesso!")
         return kokoro_model
     except Exception as e:
         print(f"❌ Erro crítico no startup: {e}")
+        # Tenta apagar o arquivo se estiver corrompido para baixar de novo no próximo boot
+        if os.path.exists("voices.bin"):
+            os.remove("voices.bin")
         raise e
 
 @app.on_event("startup")
@@ -54,8 +70,6 @@ async def startup_event():
 def home():
     return {"status": "online", "endpoints": ["/speak"]}
 
-# CORREÇÃO: Mudamos de /tts para /speak para atender o Base44
-# Aceita tanto GET quanto POST para garantir compatibilidade
 @app.api_route("/speak", methods=["GET", "POST"])
 def speak(
     text: str = Query(..., description="Texto para falar"),
@@ -64,7 +78,6 @@ def speak(
     try:
         model = get_model()
         
-        # Gera áudio
         audio, sample_rate = model.create(
             text,
             voice=voice,
