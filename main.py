@@ -7,9 +7,9 @@ import soundfile as sf
 import io
 import os
 
-app = FastAPI(title="Jarvis TTS API (Kokoro v1.0)")
+app = FastAPI(title="Jarvis TTS API")
 
-# CORS
+# CORS (Permitir Base44 e outros)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -24,26 +24,26 @@ def get_model():
     if kokoro_model is not None:
         return kokoro_model
     
-    print("🔄 Baixando modelo Kokoro v1.0...")
+    print("🔄 Carregando modelo Kokoro v1.0...")
     try:
-        # ATUALIZAÇÃO: Usando a versão v1.0 do repositório ONNX Community
-        # Baixa o modelo ONNX (v1.0)
+        # 1. Baixa o MODELO (Já funcionou no seu log)
         model_path = hf_hub_download(
             repo_id="onnx-community/Kokoro-82M-v1.0-ONNX", 
             filename="onnx/model.onnx"
         )
         
-        # Baixa o arquivo de vozes (voices.json ainda é compatível e mais fácil de achar)
+        # 2. CORREÇÃO: Baixa o VOICES.json do mesmo repositório novo
+        # O arquivo voices.json está dentro da pasta onnx/ no novo repo
         voices_path = hf_hub_download(
-            repo_id="hexgrad/Kokoro-82M", 
-            filename="voices.json"
+            repo_id="onnx-community/Kokoro-82M-v1.0-ONNX", 
+            filename="onnx/voices.json"
         )
         
         kokoro_model = Kokoro(model_path, voices_path)
         print("✅ Modelo carregado com sucesso!")
         return kokoro_model
     except Exception as e:
-        print(f"❌ Erro crítico ao carregar modelo: {e}")
+        print(f"❌ Erro crítico no startup: {e}")
         raise e
 
 @app.on_event("startup")
@@ -52,12 +52,14 @@ async def startup_event():
 
 @app.get("/")
 def home():
-    return {"status": "online", "version": "v1.0-ONNX"}
+    return {"status": "online", "endpoints": ["/speak"]}
 
-@app.get("/tts")
-def tts(
+# CORREÇÃO: Mudamos de /tts para /speak para atender o Base44
+# Aceita tanto GET quanto POST para garantir compatibilidade
+@app.api_route("/speak", methods=["GET", "POST"])
+def speak(
     text: str = Query(..., description="Texto para falar"),
-    voice: str = Query("af_bella", description="ID da voz (ex: af_bella, am_adam)")
+    voice: str = Query("af_bella", description="Voz (af_bella, am_adam, etc)")
 ):
     try:
         model = get_model()
@@ -77,5 +79,5 @@ def tts(
         return StreamingResponse(buffer, media_type="audio/wav")
 
     except Exception as e:
-        print(f"Erro na geração: {str(e)}") # Log no console do Render
+        print(f"Erro na geração: {str(e)}")
         return JSONResponse(status_code=500, content={"error": str(e)})
