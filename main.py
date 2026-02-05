@@ -7,9 +7,9 @@ import soundfile as sf
 import io
 import os
 
-app = FastAPI(title="Jarvis TTS API (Kokoro)")
+app = FastAPI(title="Jarvis TTS API (Kokoro v1.0)")
 
-# CORS (Permitir Base44 e outros)
+# CORS
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -17,56 +17,59 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Variável global para o modelo
 kokoro_model = None
 
 def get_model():
-    """Carrega o modelo apenas uma vez (Singleton) e baixa se necessário"""
     global kokoro_model
     if kokoro_model is not None:
         return kokoro_model
     
-    print("🔄 Baixando/Carregando modelo Kokoro...")
+    print("🔄 Baixando modelo Kokoro v1.0...")
     try:
-        # Baixa os arquivos necessários do HuggingFace automaticamente
-        model_path = hf_hub_download(repo_id="hexgrad/Kokoro-82M", filename="kokoro-v0_19.onnx")
-        voices_path = hf_hub_download(repo_id="hexgrad/Kokoro-82M", filename="voices.json")
+        # ATUALIZAÇÃO: Usando a versão v1.0 do repositório ONNX Community
+        # Baixa o modelo ONNX (v1.0)
+        model_path = hf_hub_download(
+            repo_id="onnx-community/Kokoro-82M-v1.0-ONNX", 
+            filename="onnx/model.onnx"
+        )
+        
+        # Baixa o arquivo de vozes (voices.json ainda é compatível e mais fácil de achar)
+        voices_path = hf_hub_download(
+            repo_id="hexgrad/Kokoro-82M", 
+            filename="voices.json"
+        )
         
         kokoro_model = Kokoro(model_path, voices_path)
         print("✅ Modelo carregado com sucesso!")
         return kokoro_model
     except Exception as e:
-        print(f"❌ Erro ao carregar modelo: {e}")
+        print(f"❌ Erro crítico ao carregar modelo: {e}")
         raise e
 
 @app.on_event("startup")
 async def startup_event():
-    # Pré-carrega o modelo ao iniciar o servidor
     get_model()
 
 @app.get("/")
 def home():
-    return {"status": "online", "engine": "Kokoro ONNX"}
+    return {"status": "online", "version": "v1.0-ONNX"}
 
 @app.get("/tts")
 def tts(
     text: str = Query(..., description="Texto para falar"),
-    voice: str = Query("af_bella", description="ID da voz (ex: af_bella, af_sarah, am_adam)")
+    voice: str = Query("af_bella", description="ID da voz (ex: af_bella, am_adam)")
 ):
     try:
         model = get_model()
         
-        # Gera o áudio (retorna raw audio data e sample rate)
-        # O Kokoro ONNX é muito rápido
+        # Gera áudio
         audio, sample_rate = model.create(
             text,
             voice=voice,
             speed=1.0,
-            lang="en-us" # Kokoro é focado em inglês, mas aceita pt com sotaque se usar phonemes (avançado)
+            lang="en-us"
         )
         
-        # Converte para arquivo em memória (WAV/FLAC)
-        # WAV é mais seguro que MP3 aqui pois não exige ffmpeg instalado no linux
         buffer = io.BytesIO()
         sf.write(buffer, audio, sample_rate, format='WAV')
         buffer.seek(0)
@@ -74,6 +77,5 @@ def tts(
         return StreamingResponse(buffer, media_type="audio/wav")
 
     except Exception as e:
+        print(f"Erro na geração: {str(e)}") # Log no console do Render
         return JSONResponse(status_code=500, content={"error": str(e)})
-
-# Para rodar localmente: uvicorn main:app --reload
