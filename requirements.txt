@@ -2,5 +2,6 @@ fastapi==0.104.1
 uvicorn[standard]==0.24.0
 python-multipart==0.0.6
 
-kokoro==0.7.16
+kokoro==0.7.4
 misaki==0.7.4
+
