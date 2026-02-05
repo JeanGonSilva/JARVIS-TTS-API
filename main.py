@@ -1,76 +1,54 @@
-import io
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, Query
 from fastapi.responses import StreamingResponse
+from fastapi.middleware.cors import CORSMiddleware
+import subprocess
+import uuid
+import io
+from pydub import AudioSegment
+import os
 
-try:
-    import kokoro
-except ImportError:
-    kokoro = None
+app = FastAPI(title="Jarvis TTS API")
 
-import numpy as np
-from pydub import AudioSegment  # para converter WAV para MP3
-
-app = FastAPI(
-    title="JARVIS TTS API",
-    version="2.0.0",
-    description="FREE JARVIS-style Text-to-Speech API - Natural human-like voice"
+# CORS liberado para Base44
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
-VOICES = {
-    "bella": "Female voice - warm and friendly",
-    "adam": "Male voice - professional and clear",
-    "sarah": "Female voice - soft and natural",
-    "josh": "Male voice - energetic and dynamic",
-    "male1": "Male voice - British accent",
-    "female1": "Female voice - British accent",
-}
+# Caminhos do Piper e modelo
+PIPER_PATH = "./piper"  # binário Piper no projeto
+MODEL_PATH = "./models/pt_BR-edresson-medium.onnx"
 
-@app.get("/speak")
-async def text_to_speech(text: str, voice: str = "bella", lang: str = "en"):
-    if not text.strip():
-        raise HTTPException(status_code=400, detail="Text parameter is required")
+@app.post("/tts")
+def tts(text: str = Query(..., description="Texto para gerar voz")):
+    """
+    Recebe texto e retorna áudio MP3 gerado pelo Piper.
+    """
 
-    if voice not in VOICES:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Voice '{voice}' not found. Available: {list(VOICES.keys())}"
-        )
+    # Arquivo temporário WAV
+    wav_path = f"/tmp/{uuid.uuid4()}.wav"
 
-    if len(text) > 2000:
-        raise HTTPException(status_code=400, detail="Text too long (max 2000 characters)")
-
-    if not kokoro:
-        raise HTTPException(
-            status_code=503,
-            detail="Kokoro TTS not installed. Install with: pip install -U git+https://github.com/hexgrad/kokoro"
-        )
-
+    # Executa Piper para gerar WAV
     try:
-        # Gerar fala com Kokoro
-        samples: np.ndarray = kokoro.generate(
-            text=text,
-            voice=voice,
-            speed=1.0
+        subprocess.run(
+            [PIPER_PATH, "--model", MODEL_PATH, "--output_file", wav_path],
+            input=text,
+            text=True,
+            check=True
         )
+    except subprocess.CalledProcessError as e:
+        return {"error": "Falha ao gerar áudio", "details": str(e)}
 
-        # Converter samples para WAV usando AudioSegment
-        audio_buffer = io.BytesIO()
-        # AudioSegment precisa de int16
-        audio_segment = AudioSegment(
-            samples.tobytes(), 
-            frame_rate=24000,
-            sample_width=2, 
-            channels=1
-        )
-        # Exportar para MP3
-        audio_segment.export(audio_buffer, format="mp3")
-        audio_buffer.seek(0)
+    # Converte WAV → MP3 em memória
+    audio = AudioSegment.from_wav(wav_path)
+    mp3_io = io.BytesIO()
+    audio.export(mp3_io, format="mp3")
+    mp3_io.seek(0)
 
-        return StreamingResponse(
-            iter([audio_buffer.getvalue()]),
-            media_type="audio/mpeg",
-            headers={"Content-Disposition": f"attachment; filename=speech.mp3"}
-        )
+    # Remove WAV temporário
+    os.remove(wav_path)
 
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error generating speech: {str(e)}")
+    # Retorna MP3 como streaming
+    return StreamingResponse(mp3_io, media_type="audio/mpeg")
