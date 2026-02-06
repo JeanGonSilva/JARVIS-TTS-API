@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Query, HTTPException
+from fastapi import FastAPI, Query
 from fastapi.responses import StreamingResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from kokoro_onnx import Kokoro
@@ -9,9 +9,8 @@ import io
 import os
 import gc
 
-app = FastAPI(title="Jarvis TTS API (Multi-Language)")
+app = FastAPI(title="Jarvis TTS API (Debug Mode)")
 
-# CORS
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -26,15 +25,13 @@ def get_model():
     if kokoro_model is not None:
         return kokoro_model
     
-    print("🔄 Carregando modelo LIGHT (Multi-Idiomas)...")
+    print("🔄 Carregando modelo...")
     try:
-        # 1. Baixa o Modelo Quantizado (~87MB)
         model_path = hf_hub_download(
             repo_id="onnx-community/Kokoro-82M-v1.0-ONNX", 
             filename="onnx/model_quantized.onnx" 
         )
         
-        # 2. Baixa o arquivo de Vozes (voices.bin)
         voices_file = "voices.bin"
         if not os.path.exists(voices_file):
             print("   - Baixando voices.bin...")
@@ -45,13 +42,12 @@ def get_model():
         
         voices_path = os.path.abspath(voices_file)
         
-        # 3. Inicializa
-        gc.collect()
+        # Tenta inicializar. O espeak-ng costuma ser o vilão aqui.
         kokoro_model = Kokoro(model_path, voices_path)
         print("✅ Modelo carregado!")
         return kokoro_model
     except Exception as e:
-        print(f"❌ Erro crítico: {e}")
+        print(f"❌ Erro crítico no startup: {e}")
         raise e
 
 @app.on_event("startup")
@@ -60,29 +56,26 @@ async def startup_event():
 
 @app.get("/")
 def home():
-    return {
-        "status": "online", 
-        "info": "Use /speak?text=Ola&lang=pt-br&voice=pf_dora",
-        "voices_br": ["pf_dora (Mulher)", "pm_alex (Homem)", "pm_santa (Papai Noel)"]
-    }
+    return {"status": "online", "debug": "true"}
 
 @app.api_route("/speak", methods=["GET", "POST"])
 def speak(
-    text: str = Query(..., description="Texto para falar"),
-    voice: str = Query("pf_dora", description="Voz: pf_dora (BR), pm_alex (BR), af_bella (EN)"),
-    lang: str = Query("pt-br", description="Idioma: pt-br ou en-us")
+    text: str = Query(..., description="Texto"),
+    voice: str = Query("pf_dora", description="Voz"),
+    lang: str = Query("pt-br", description="Idioma")
 ):
     try:
+        print(f"📩 Recebido: '{text}' | Voz: {voice} | Lang: {lang}")
         model = get_model()
         
-        # Mapeamento de idiomas para o código do Kokoro
-        # 'p' = Português, 'a' = American English, 'b' = British English
-        lang_code = 'p' if lang.lower() in ['pt', 'pt-br', 'br'] else 'a'
-        
-        # Se o usuário pedir inglês explicitamente
-        if lang.lower() in ['en', 'en-us']:
-            lang_code = 'a'
-        
+        # Mapeamento simplificado para teste
+        lang_code = 'p' if 'pt' in lang.lower() else 'a'
+        if lang_code == 'p' and 'pf_' not in voice and 'pm_' not in voice:
+             # Se pedir pt-br mas usar voz americana, força voz BR padrão
+             voice = "pf_dora"
+
+        print(f"⚙️ Gerando: lang_code='{lang_code}', voice='{voice}'")
+
         audio, sample_rate = model.create(
             text,
             voice=voice,
@@ -90,6 +83,8 @@ def speak(
             lang=lang_code
         )
         
+        print(f"✅ Áudio gerado! Tamanho: {len(audio)}")
+
         buffer = io.BytesIO()
         sf.write(buffer, audio, sample_rate, format='WAV')
         buffer.seek(0)
@@ -100,4 +95,7 @@ def speak(
         return StreamingResponse(buffer, media_type="audio/wav")
 
     except Exception as e:
-        return JSONResponse(status_code=500, content={"error": str(e)})
+        # ISSO VAI MOSTRAR O ERRO REAL NO LOG DO RENDER
+        error_msg = f"❌ ERRO FATAL: {str(e)}"
+        print(error_msg) 
+        return JSONResponse(status_code=500, content={"error": str(e), "details": "Verifique os logs do Render"})
