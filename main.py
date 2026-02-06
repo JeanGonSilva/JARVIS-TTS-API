@@ -20,22 +20,21 @@ app.add_middleware(
 kokoro_model = None
 
 def download_file(url, filename):
-    """Função auxiliar para baixar arquivos grandes com segurança"""
     if os.path.exists(filename):
-        print(f"✅ Arquivo encontrado: {filename}")
+        print(f"✅ Arquivo já existe: {filename}")
         return
     
-    print(f"⬇️ Baixando {filename} de {url}...")
+    print(f"⬇️ Baixando {filename}...")
     try:
-        response = requests.get(url, stream=True)
+        # Timeout de 30s para evitar travamentos
+        response = requests.get(url, stream=True, timeout=30)
         response.raise_for_status()
         with open(filename, "wb") as f:
             for chunk in response.iter_content(chunk_size=8192):
                 f.write(chunk)
-        print(f"✅ Download concluído: {filename}")
+        print(f"✅ Download concluído!")
     except Exception as e:
-        print(f"❌ Falha ao baixar {filename}: {e}")
-        # Remove arquivo corrompido se falhar
+        print(f"❌ Falha no download de {filename}: {e}")
         if os.path.exists(filename):
             os.remove(filename)
         raise e
@@ -45,29 +44,24 @@ def get_model():
     if kokoro_model is not None:
         return kokoro_model
     
-    print("🔄 Inicializando sistema de IA...")
+    print("🔄 Inicializando IA...")
     try:
-        # 1. Baixar MODELO QUANTIZADO OFICIAL (Release v1.0)
-        # Fonte: Releases do repositório oficial kokoro-onnx
-        model_filename = "kokoro-v1.0_quant.onnx"
-        model_url = "https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/kokoro-v1.0_quant.onnx"
-        download_file(model_url, model_filename)
+        # CORREÇÃO: O nome correto do arquivo na release oficial é .int8.onnx
+        # Link: https://github.com/thewh1teagle/kokoro-onnx/releases/tag/model-files-v1.0
+        model_name = "kokoro-v1.0.int8.onnx"
+        model_url = f"https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/{model_name}"
         
-        # 2. Baixar VOZES (Release v1.0)
-        voices_filename = "voices.bin"
-        voices_url = "https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/voices-v1.0.bin"
-        download_file(voices_url, voices_filename)
+        voices_name = "voices-v1.0.bin"
+        voices_url = f"https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/{voices_name}"
         
-        # Caminhos absolutos
-        model_path = os.path.abspath(model_filename)
-        voices_path = os.path.abspath(voices_filename)
+        download_file(model_url, model_name)
+        download_file(voices_url, voices_name)
         
-        # Inicializa
-        kokoro_model = Kokoro(model_path, voices_path)
-        print("✅ Modelo carregado na memória!")
+        kokoro_model = Kokoro(model_name, voices_name)
+        print("✅ Modelo carregado!")
         return kokoro_model
     except Exception as e:
-        print(f"❌ Erro crítico no startup: {e}")
+        print(f"❌ Erro crítico: {e}")
         raise e
 
 @app.on_event("startup")
@@ -76,46 +70,45 @@ async def startup_event():
 
 @app.get("/")
 def home():
-    return {"status": "online", "model": "kokoro-v1.0_quant"}
+    return {"status": "online", "model": "v1.0-int8"}
 
 @app.api_route("/speak", methods=["GET", "POST"])
 def speak(
     text: str = Query(..., description="Texto"),
-    voice: str = Query("pf_dora", description="Voz (pf_dora, pm_alex)"),
-    lang: str = Query("pt-br", description="Idioma (pt-br, en-us)")
+    voice: str = Query("pf_dora", description="Voz"),
+    lang: str = Query("pt-br", description="Idioma")
 ):
     try:
         model = get_model()
         
-        # Lógica de idioma
+        # Tratamento de idioma
         target_lang = "pt-br"
         if "en" in lang.lower():
             target_lang = "en-us"
-        elif "br" in lang.lower() or "pt" in lang.lower():
+        elif "br" in lang.lower():
             target_lang = "pt-br"
-            # Fallback para voz BR se necessário
+            # Se pediu BR mas a voz não é BR, força Dora
             if "pf_" not in voice and "pm_" not in voice:
                 voice = "pf_dora"
 
-        print(f"🎤 Processando: '{text[:15]}...' | Lang: {target_lang} | Voz: {voice}")
+        print(f"🎤 '{text[:10]}...' | {target_lang} | {voice}")
 
         audio, sample_rate = model.create(
             text,
             voice=voice,
             speed=1.0,
-            lang=target_lang 
+            lang=target_lang
         )
         
         buffer = io.BytesIO()
         sf.write(buffer, audio, sample_rate, format='WAV')
         buffer.seek(0)
         
-        # Limpeza de memória
         del audio
         gc.collect()
         
         return StreamingResponse(buffer, media_type="audio/wav")
 
     except Exception as e:
-        print(f"❌ Erro na geração: {str(e)}")
+        print(f"❌ Erro: {e}")
         return JSONResponse(status_code=500, content={"error": str(e)})
