@@ -9,7 +9,7 @@ import io
 import os
 import gc
 
-app = FastAPI(title="Jarvis TTS API (Debug Mode)")
+app = FastAPI(title="Jarvis TTS API")
 
 app.add_middleware(
     CORSMiddleware,
@@ -42,7 +42,6 @@ def get_model():
         
         voices_path = os.path.abspath(voices_file)
         
-        # Tenta inicializar. O espeak-ng costuma ser o vilão aqui.
         kokoro_model = Kokoro(model_path, voices_path)
         print("✅ Modelo carregado!")
         return kokoro_model
@@ -56,35 +55,39 @@ async def startup_event():
 
 @app.get("/")
 def home():
-    return {"status": "online", "debug": "true"}
+    return {"status": "online"}
 
 @app.api_route("/speak", methods=["GET", "POST"])
 def speak(
     text: str = Query(..., description="Texto"),
-    voice: str = Query("pf_dora", description="Voz"),
-    lang: str = Query("pt-br", description="Idioma")
+    voice: str = Query("pf_dora", description="Voz (pf_dora, pm_alex, af_bella)"),
+    lang: str = Query("pt-br", description="Idioma (pt-br, en-us)")
 ):
     try:
-        print(f"📩 Recebido: '{text}' | Voz: {voice} | Lang: {lang}")
         model = get_model()
         
-        # Mapeamento simplificado para teste
-        lang_code = 'p' if 'pt' in lang.lower() else 'a'
-        if lang_code == 'p' and 'pf_' not in voice and 'pm_' not in voice:
-             # Se pedir pt-br mas usar voz americana, força voz BR padrão
-             voice = "pf_dora"
+        # CORREÇÃO: Usar códigos ISO reais (pt-br, en-us)
+        # A biblioteca kokoro-onnx cuida da conversão interna.
+        target_lang = "pt-br"
+        
+        if "en" in lang.lower():
+            target_lang = "en-us"
+        elif "br" in lang.lower() or "pt" in lang.lower():
+            target_lang = "pt-br"
+            
+            # Garante voz BR se o usuário pedir PT-BR mas usar voz gringa
+            if "pf_" not in voice and "pm_" not in voice:
+                voice = "pf_dora"
 
-        print(f"⚙️ Gerando: lang_code='{lang_code}', voice='{voice}'")
+        print(f"🎤 Falando: '{text[:20]}...' | Lang: {target_lang} | Voz: {voice}")
 
         audio, sample_rate = model.create(
             text,
             voice=voice,
             speed=1.0,
-            lang=lang_code
+            lang=target_lang 
         )
         
-        print(f"✅ Áudio gerado! Tamanho: {len(audio)}")
-
         buffer = io.BytesIO()
         sf.write(buffer, audio, sample_rate, format='WAV')
         buffer.seek(0)
@@ -95,7 +98,5 @@ def speak(
         return StreamingResponse(buffer, media_type="audio/wav")
 
     except Exception as e:
-        # ISSO VAI MOSTRAR O ERRO REAL NO LOG DO RENDER
-        error_msg = f"❌ ERRO FATAL: {str(e)}"
-        print(error_msg) 
-        return JSONResponse(status_code=500, content={"error": str(e), "details": "Verifique os logs do Render"})
+        print(f"❌ Erro: {str(e)}")
+        return JSONResponse(status_code=500, content={"error": str(e)})
